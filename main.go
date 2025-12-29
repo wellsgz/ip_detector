@@ -25,6 +25,12 @@ func main() {
 	interval := flag.Int("interval", 300, "Check interval in seconds for daemon mode (default: 300)")
 	flag.Parse()
 
+	// Get hostname for notifications
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "unknown"
+	}
+
 	// Handle check-only mode (works without configuration)
 	if *checkOnly {
 		service := "ipify"
@@ -34,12 +40,25 @@ func main() {
 				service = cfg.SelectedService
 			}
 		}
-		ip, usedService, err := detector.DetectIPWithFallback(service)
+
+		fmt.Println("Detecting IP addresses...")
+		fmt.Printf("Hostname: %s\n\n", hostname)
+
+		// Detect IPv4
+		ipv4, v4Service, err := detector.DetectIPv4WithFallback(service)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to detect IP: %v\n", err)
-			os.Exit(1)
+			fmt.Printf("IPv4: Not detected (%v)\n", err)
+		} else {
+			fmt.Printf("IPv4: %s (via %s)\n", ipv4, v4Service)
 		}
-		fmt.Printf("Current IP: %s (via %s)\n", ip, usedService)
+
+		// Detect IPv6
+		ipv6, v6Service, _ := detector.DetectIPv6WithFallback(service)
+		if ipv6 == "" {
+			fmt.Println("IPv6: Not available")
+		} else {
+			fmt.Printf("IPv6: %s (via %s)\n", ipv6, v6Service)
+		}
 		return
 	}
 
@@ -64,7 +83,7 @@ func main() {
 
 	// Handle test notification
 	if *testNotify {
-		if err := sendTestNotification(cfg); err != nil {
+		if err := sendTestNotification(cfg, hostname); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to send test notification: %v\n", err)
 			os.Exit(1)
 		}
@@ -74,12 +93,12 @@ func main() {
 
 	// Handle daemon mode
 	if *daemon {
-		runDaemon(cfg, *interval)
+		runDaemon(cfg, hostname, *interval)
 		return
 	}
 
 	// Default: single check with notification
-	if err := checkAndNotify(cfg); err != nil {
+	if err := checkAndNotify(cfg, hostname); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -96,9 +115,9 @@ func runSetupWizard() error {
 	// Select IP detection service
 	fmt.Println("Available IP detection services:")
 	for i, service := range detector.Services {
-		fmt.Printf("  %d. %s (%s)\n", i+1, service.Name, service.URL)
+		fmt.Printf("  %d. %s\n", i+1, service.Name)
 	}
-	fmt.Print("\nSelect a service (1-5): ")
+	fmt.Print("\nSelect a service (1-2): ")
 	serviceInput, _ := reader.ReadString('\n')
 	serviceIdx, err := strconv.Atoi(strings.TrimSpace(serviceInput))
 	if err != nil || serviceIdx < 1 || serviceIdx > len(detector.Services) {
@@ -137,7 +156,8 @@ func runSetupWizard() error {
 	// Test the configuration
 	fmt.Println("\n🔄 Testing Telegram connection...")
 	cfg, _ := config.Load()
-	if err := sendTestNotification(cfg); err != nil {
+	hostname, _ := os.Hostname()
+	if err := sendTestNotification(cfg, hostname); err != nil {
 		fmt.Printf("⚠️  Warning: Test notification failed: %v\n", err)
 		fmt.Print("Continue anyway? (y/n): ")
 		confirm, _ := reader.ReadString('\n')
@@ -151,7 +171,7 @@ func runSetupWizard() error {
 	return nil
 }
 
-func sendTestNotification(cfg *config.Config) error {
+func sendTestNotification(cfg *config.Config, hostname string) error {
 	botToken, err := cfg.GetBotToken()
 	if err != nil {
 		return fmt.Errorf("failed to decrypt bot token: %w", err)
@@ -163,66 +183,106 @@ func sendTestNotification(cfg *config.Config) error {
 	}
 
 	tn := notifier.NewTelegramNotifier(botToken, chatID)
-	return tn.SendTestNotification()
+	return tn.SendTestNotification(hostname)
 }
 
-func checkAndNotify(cfg *config.Config) error {
-	// Detect current IP
-	ip, service, err := detector.DetectIPWithFallback(cfg.SelectedService)
-	if err != nil {
-		return fmt.Errorf("failed to detect IP: %w", err)
-	}
-
-	fmt.Printf("Current IP: %s (via %s)\n", ip, service)
-
-	// Check if IP has changed
-	if ip == cfg.LastKnownIP {
-		fmt.Println("No IP change detected.")
-		return nil
-	}
-
-	oldIP := cfg.LastKnownIP
+func checkAndNotify(cfg *config.Config, hostname string) error {
 	now := time.Now()
+	changed := false
 
-	// Update configuration
-	cfg.LastKnownIP = ip
-	cfg.LastChecked = now.Format(time.RFC3339)
-	if err := cfg.Save(); err != nil {
-		return fmt.Errorf("failed to save configuration: %w", err)
-	}
-
-	// Add to history
-	if err := config.AddHistoryEntry(oldIP, ip); err != nil {
-		fmt.Printf("⚠️  Warning: Failed to save history: %v\n", err)
-	}
-
-	// Send notification
-	botToken, err := cfg.GetBotToken()
+	// Detect IPv4
+	ipv4, v4Service, err := detector.DetectIPv4WithFallback(cfg.SelectedService)
 	if err != nil {
-		return fmt.Errorf("failed to decrypt bot token: %w", err)
-	}
-
-	chatID, err := cfg.GetChatID()
-	if err != nil {
-		return fmt.Errorf("failed to decrypt chat ID: %w", err)
-	}
-
-	tn := notifier.NewTelegramNotifier(botToken, chatID)
-	if err := tn.SendIPChangeNotification(oldIP, ip, now); err != nil {
-		return fmt.Errorf("failed to send notification: %w", err)
-	}
-
-	if oldIP == "" {
-		fmt.Println("✅ Initial IP recorded and notification sent.")
+		fmt.Printf("⚠️  IPv4 detection failed: %v\n", err)
 	} else {
-		fmt.Printf("✅ IP changed from %s to %s. Notification sent.\n", oldIP, ip)
+		fmt.Printf("IPv4: %s (via %s)\n", ipv4, v4Service)
+
+		if ipv4 != cfg.LastKnownIPv4 {
+			oldIP := cfg.LastKnownIPv4
+			cfg.LastKnownIPv4 = ipv4
+			changed = true
+
+			// Add to history
+			if err := config.AddHistoryEntry("ipv4", oldIP, ipv4); err != nil {
+				fmt.Printf("⚠️  Warning: Failed to save history: %v\n", err)
+			}
+
+			// Send notification
+			if err := sendIPNotification(cfg, hostname, "ipv4", oldIP, ipv4, now); err != nil {
+				fmt.Printf("⚠️  Warning: Failed to send IPv4 notification: %v\n", err)
+			} else {
+				if oldIP == "" {
+					fmt.Println("✅ Initial IPv4 recorded and notification sent.")
+				} else {
+					fmt.Printf("✅ IPv4 changed from %s to %s. Notification sent.\n", oldIP, ipv4)
+				}
+			}
+		}
+	}
+
+	// Detect IPv6
+	ipv6, v6Service, _ := detector.DetectIPv6WithFallback(cfg.SelectedService)
+	if ipv6 != "" {
+		fmt.Printf("IPv6: %s (via %s)\n", ipv6, v6Service)
+
+		if ipv6 != cfg.LastKnownIPv6 {
+			oldIP := cfg.LastKnownIPv6
+			cfg.LastKnownIPv6 = ipv6
+			changed = true
+
+			// Add to history
+			if err := config.AddHistoryEntry("ipv6", oldIP, ipv6); err != nil {
+				fmt.Printf("⚠️  Warning: Failed to save history: %v\n", err)
+			}
+
+			// Send notification
+			if err := sendIPNotification(cfg, hostname, "ipv6", oldIP, ipv6, now); err != nil {
+				fmt.Printf("⚠️  Warning: Failed to send IPv6 notification: %v\n", err)
+			} else {
+				if oldIP == "" {
+					fmt.Println("✅ Initial IPv6 recorded and notification sent.")
+				} else {
+					fmt.Printf("✅ IPv6 changed from %s to %s. Notification sent.\n", oldIP, ipv6)
+				}
+			}
+		}
+	} else if cfg.LastKnownIPv6 != "" {
+		// IPv6 was available before but not anymore
+		fmt.Println("IPv6: Not available (was: " + cfg.LastKnownIPv6 + ")")
+	} else {
+		fmt.Println("IPv6: Not available")
+	}
+
+	if changed {
+		cfg.LastChecked = now.Format(time.RFC3339)
+		if err := cfg.Save(); err != nil {
+			return fmt.Errorf("failed to save configuration: %w", err)
+		}
+	} else {
+		fmt.Println("No IP changes detected.")
 	}
 
 	return nil
 }
 
-func runDaemon(cfg *config.Config, intervalSeconds int) {
+func sendIPNotification(cfg *config.Config, hostname, ipType, oldIP, newIP string, timestamp time.Time) error {
+	botToken, err := cfg.GetBotToken()
+	if err != nil {
+		return fmt.Errorf("failed to decrypt bot token: %w", err)
+	}
+
+	chatID, err := cfg.GetChatID()
+	if err != nil {
+		return fmt.Errorf("failed to decrypt chat ID: %w", err)
+	}
+
+	tn := notifier.NewTelegramNotifier(botToken, chatID)
+	return tn.SendIPChangeNotification(hostname, ipType, oldIP, newIP, timestamp)
+}
+
+func runDaemon(cfg *config.Config, hostname string, intervalSeconds int) {
 	fmt.Printf("Starting IP detector daemon (checking every %d seconds)...\n", intervalSeconds)
+	fmt.Printf("Hostname: %s\n", hostname)
 	fmt.Println("Press Ctrl+C to stop.")
 
 	// Set up signal handling for graceful shutdown
@@ -233,7 +293,7 @@ func runDaemon(cfg *config.Config, intervalSeconds int) {
 	defer ticker.Stop()
 
 	// Run immediately on start
-	if err := checkAndNotify(cfg); err != nil {
+	if err := checkAndNotify(cfg, hostname); err != nil {
 		fmt.Printf("Error: %v\n", err)
 	}
 
@@ -249,7 +309,7 @@ func runDaemon(cfg *config.Config, intervalSeconds int) {
 				fmt.Printf("Error loading config: %v\n", err)
 				continue
 			}
-			if err := checkAndNotify(cfg); err != nil {
+			if err := checkAndNotify(cfg, hostname); err != nil {
 				fmt.Printf("Error: %v\n", err)
 			}
 		}

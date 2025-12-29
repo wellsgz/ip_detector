@@ -22,13 +22,17 @@ type Config struct {
 	SelectedService   string `json:"selected_service"`
 	EncryptedBotToken string `json:"encrypted_bot_token"`
 	EncryptedChatID   string `json:"encrypted_chat_id"`
-	LastKnownIP       string `json:"last_known_ip"`
+	LastKnownIPv4     string `json:"last_known_ipv4"`
+	LastKnownIPv6     string `json:"last_known_ipv6"`
 	LastChecked       string `json:"last_checked"`
+	// Legacy field for backward compatibility (will be migrated to LastKnownIPv4)
+	LastKnownIP string `json:"last_known_ip,omitempty"`
 }
 
 // IPHistoryEntry represents a single IP change record
 type IPHistoryEntry struct {
 	Timestamp string `json:"timestamp"`
+	Type      string `json:"type"` // "ipv4" or "ipv6"
 	OldIP     string `json:"old_ip"`
 	NewIP     string `json:"new_ip"`
 }
@@ -87,6 +91,14 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
+	// Migrate legacy LastKnownIP to LastKnownIPv4
+	if config.LastKnownIP != "" && config.LastKnownIPv4 == "" {
+		config.LastKnownIPv4 = config.LastKnownIP
+		config.LastKnownIP = ""
+		// Save the migrated config
+		_ = config.Save()
+	}
+
 	return &config, nil
 }
 
@@ -105,6 +117,9 @@ func (c *Config) Save() error {
 	if err != nil {
 		return err
 	}
+
+	// Clear legacy field
+	c.LastKnownIP = ""
 
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
@@ -197,7 +212,7 @@ func SaveHistory(history []IPHistoryEntry) error {
 }
 
 // AddHistoryEntry adds a new entry to the IP history
-func AddHistoryEntry(oldIP, newIP string) error {
+func AddHistoryEntry(ipType, oldIP, newIP string) error {
 	history, err := LoadHistory()
 	if err != nil {
 		return err
@@ -205,6 +220,7 @@ func AddHistoryEntry(oldIP, newIP string) error {
 
 	entry := IPHistoryEntry{
 		Timestamp: time.Now().Format(time.RFC3339),
+		Type:      ipType,
 		OldIP:     oldIP,
 		NewIP:     newIP,
 	}

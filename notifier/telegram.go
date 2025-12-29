@@ -48,27 +48,38 @@ func (t *TelegramNotifier) SendMessage(message string) error {
 	return nil
 }
 
-// SendIPChangeNotification sends a formatted IP change notification
-func (t *TelegramNotifier) SendIPChangeNotification(oldIP, newIP string, timestamp time.Time) error {
+// SendIPChangeNotification sends a formatted IP change notification with hostname
+func (t *TelegramNotifier) SendIPChangeNotification(hostname, ipType, oldIP, newIP string, timestamp time.Time) error {
 	var message string
+	typeLabel := "IPv4"
+	if ipType == "ipv6" {
+		typeLabel = "IPv6"
+	}
+
 	if oldIP == "" {
 		message = fmt.Sprintf("🌐 *IP Detector Initialized*\n\n"+
+			"🖥️ Host: `%s`\n"+
+			"🏷️ Type: %s\n"+
 			"📍 Current IP: `%s`\n"+
 			"🕐 Time: %s",
-			newIP, timestamp.Format("2006-01-02 15:04:05 MST"))
+			hostname, typeLabel, newIP, timestamp.Format("2006-01-02 15:04:05 MST"))
 	} else {
 		message = fmt.Sprintf("🔄 *IP Address Changed*\n\n"+
+			"🖥️ Host: `%s`\n"+
+			"🏷️ Type: %s\n"+
 			"📍 Old IP: `%s`\n"+
 			"📍 New IP: `%s`\n"+
 			"🕐 Time: %s",
-			oldIP, newIP, timestamp.Format("2006-01-02 15:04:05 MST"))
+			hostname, typeLabel, oldIP, newIP, timestamp.Format("2006-01-02 15:04:05 MST"))
 	}
 
 	return t.SendMessage(message)
 }
 
-// SendTestNotification sends a test notification
-func (t *TelegramNotifier) SendTestNotification() error {
-	message := "✅ *IP Detector Test*\n\nTelegram notification is working correctly!"
+// SendTestNotification sends a test notification with hostname
+func (t *TelegramNotifier) SendTestNotification(hostname string) error {
+	message := fmt.Sprintf("✅ *IP Detector Test*\n\n"+
+		"🖥️ Host: `%s`\n"+
+		"Telegram notification is working correctly!", hostname)
 	return t.SendMessage(message)
 }

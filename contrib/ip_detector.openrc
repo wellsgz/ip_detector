@@ -7,14 +7,8 @@ command_args="--daemon --interval 300"
 command_user="${RC_SVCNAME##*.}"
 command_background="yes"
 pidfile="/run/${RC_SVCNAME}.pid"
-output_log="/var/log/ip_detector.log"
-error_log="/var/log/ip_detector.log"
 
 depend() {
     need net
     after firewall
-}
-
-start_pre() {
-    checkpath --file --owner ${command_user} ${output_log}
 }
