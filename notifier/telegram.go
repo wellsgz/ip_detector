@@ -48,30 +48,60 @@ func (t *TelegramNotifier) SendMessage(message string) error {
 	return nil
 }
 
-// SendIPChangeNotification sends a formatted IP change notification with hostname
-func (t *TelegramNotifier) SendIPChangeNotification(hostname, ipType, oldIP, newIP string, timestamp time.Time) error {
-	var message string
-	typeLabel := "IPv4"
-	if ipType == "ipv6" {
-		typeLabel = "IPv6"
+// IPStatus holds the status of an IP (current value and whether it changed)
+type IPStatus struct {
+	Current  string
+	Previous string
+	Changed  bool
+}
+
+// SendCombinedIPNotification sends a notification with both IPv4 and IPv6 status
+func (t *TelegramNotifier) SendCombinedIPNotification(hostname string, ipv4, ipv6 IPStatus, timestamp time.Time) error {
+	var title string
+	if (ipv4.Changed && ipv4.Previous == "") || (ipv6.Changed && ipv6.Previous == "") {
+		title = "🌐 *IP Detector Initialized*"
+	} else {
+		title = "🔄 *IP Address Changed*"
 	}
 
-	if oldIP == "" {
-		message = fmt.Sprintf("🌐 *IP Detector Initialized*\n\n"+
-			"🖥️ Host: `%s`\n"+
-			"🏷️ Type: %s\n"+
-			"📍 Current IP: `%s`\n"+
-			"🕐 Time: %s",
-			hostname, typeLabel, newIP, timestamp.Format("2006-01-02 15:04:05 MST"))
+	// Build IPv4 section
+	var ipv4Section string
+	if ipv4.Current != "" {
+		if ipv4.Changed {
+			if ipv4.Previous == "" {
+				ipv4Section = fmt.Sprintf("📍 IPv4: `%s` (new)", ipv4.Current)
+			} else {
+				ipv4Section = fmt.Sprintf("📍 IPv4: `%s` ← `%s`", ipv4.Current, ipv4.Previous)
+			}
+		} else {
+			ipv4Section = fmt.Sprintf("📍 IPv4: `%s`", ipv4.Current)
+		}
 	} else {
-		message = fmt.Sprintf("🔄 *IP Address Changed*\n\n"+
-			"🖥️ Host: `%s`\n"+
-			"🏷️ Type: %s\n"+
-			"📍 Old IP: `%s`\n"+
-			"📍 New IP: `%s`\n"+
-			"🕐 Time: %s",
-			hostname, typeLabel, oldIP, newIP, timestamp.Format("2006-01-02 15:04:05 MST"))
+		ipv4Section = "📍 IPv4: Not available"
 	}
+
+	// Build IPv6 section
+	var ipv6Section string
+	if ipv6.Current != "" {
+		if ipv6.Changed {
+			if ipv6.Previous == "" {
+				ipv6Section = fmt.Sprintf("📍 IPv6: `%s` (new)", ipv6.Current)
+			} else {
+				ipv6Section = fmt.Sprintf("📍 IPv6: `%s` ← `%s`", ipv6.Current, ipv6.Previous)
+			}
+		} else {
+			ipv6Section = fmt.Sprintf("📍 IPv6: `%s`", ipv6.Current)
+		}
+	} else {
+		ipv6Section = "📍 IPv6: Not available"
+	}
+
+	message := fmt.Sprintf("%s\n\n"+
+		"🖥️ Host: `%s`\n"+
+		"%s\n"+
+		"%s\n"+
+		"🕐 Time: %s",
+		title, hostname, ipv4Section, ipv6Section, timestamp.Format("2006-01-02 15:04:05 MST"))
 
 	return t.SendMessage(message)
 }
